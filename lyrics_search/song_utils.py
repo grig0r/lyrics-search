@@ -1,3 +1,5 @@
+from urllib.parse import urlsplit
+
 from . import tekstowo
 from . import genius
 
