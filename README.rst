@@ -19,7 +19,7 @@ one-liner
 
 .. code-block:: bash
 
-  git clone https://github.com/grig0r/python-duckduckgo-search && cd python-duckduckgo-search/ && python setup.py install
+  git clone https://github.com/grig0r/lyrics-search && cd lyrics-search/ && python setup.py install
 
 Usage
 ----
