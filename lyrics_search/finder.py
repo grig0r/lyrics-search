@@ -1,5 +1,7 @@
 import re
 from urllib.parse import urlsplit
+from concurrent.futures import ThreadPoolExecutor as Pool
+from collections import deque
 
 from . import tekstowo
 from . import genius
@@ -28,12 +30,12 @@ class Finder(object):
             import ddgclient
             self.backends.append(ddgclient)
 
-    def filter_by_domain(self, results, domain):
+    def _filter_by_domain(self, results, domain):
         return [r for r in results
             if re.match(domain, urlsplit(r.url).netloc)]
 
-    def filter_duplicates(self, results):
-        out = []
+    def _filter_duplicates(self, results):
+        out = deque()
         for result in results:
             if result.url not in (r.url for r in out):
                 out.append(result)
@@ -47,44 +49,71 @@ class Finder(object):
             )
         return sorted_songs
 
-    def _find_all(self, title, website, domain, url_regex):
-        all_results = []
-        for engine in self.backends:
-            search = engine.Search(title + ' ' + website)
-            engine_results = self.filter_by_domain(search.results(self.max_results), domain)
-            engine_results = [r for r in engine_results
-                if re.search(url_regex, r.url)]
-            all_results.extend(engine_results[:self.max_songs])
-        all_results = self.filter_duplicates(all_results)
-        songs = [create_song(r.url) for r in all_results]
-        return songs
+    def _find_all_results(self, title, website, domain, url_regex, engine):
+        search = engine.Search(title + ' ' + website)
+        results = self._filter_by_domain(search.results(self.max_results), domain)
+        results = [r for r in results
+            if re.search(url_regex, r.url)]
+        results = results[:self.max_songs]
+        return results
 
-    def find_all_genius(self, title):
-        songs = self._find_all(
+    def _find_all_results_futures(self, title, website, domain, url_regex):
+        futures = deque()
+        with Pool() as pool:
+            for engine in self.backends:
+                futures.append(pool.submit(
+                    self._find_all_results,
+                    title=title,
+                    website=website,
+                    domain=domain,
+                    url_regex=url_regex,
+                    engine=engine
+                    ))
+        return futures
+
+    def _find_all_genius_results_futures(self, title):
+        futures = self._find_all_results_futures(
             title=title,
             website='genius',
             domain=r'genius.com',
             url_regex=r'-lyrics$',
             )
-        return self.sort_by_fitting(songs, title)
+        return futures
 
-    def find_all_tekstowo(self, title):
-        songs = self._find_all(
+    def _find_all_tekstowo_results_futures(self, title):
+        futures = self._find_all_results_futures(
             title=title,
             website='tekstowo',
             domain=r'www.tekstowo.pl',
             url_regex=r'tekstowo.pl/piosenka,',
             )
-        return self.sort_by_fitting(songs, title)
+        return futures
+
+    def _results_to_songs(self, results):
+        urls = (r.url for r in results)
+        with Pool() as pool:
+            songs = list(pool.map(create_song, urls))
+        return songs
 
     def find_all(self, title, genius=True, tekstowo=True):
         """Find all songs found with given title. Returns list of *Song objects"""
-        songs = []
+        results_futures = deque()
         if genius:
-            songs.extend(self.find_all_genius(title))
+            results_futures.extend(self._find_all_genius_results_futures(title))
         if tekstowo:
-            songs.extend(self.find_all_tekstowo(title))
+            results_futures.extend(self._find_all_tekstowo_results_futures(title))
+        results = deque()
+        for future in results_futures:
+            results.extend(future.result())
+        results = self._filter_duplicates(results)
+        songs = self._results_to_songs(results)
         return self.sort_by_fitting(songs, title)
+
+    def find_all_genius(self, title):
+        return self.find_all(title, genius=True, tekstowo=False)
+
+    def find_all_tekstowo(self, title):
+        return self.find_all(title, genius=False, tekstowo=True)
 
     def find(self, title, genius=True, tekstowo=True):
         """Find best fitting song for the title. Returns adequate *Song object depending on the website"""
