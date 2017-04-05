@@ -107,6 +107,7 @@ class Finder(object):
             results.extend(future.result())
         results = self._filter_duplicates(results)
         songs = self._results_to_songs(results)
+        songs = list(filter(lambda s: s.lyrics, songs))
         return self.sort_by_fitting(songs, title)
 
     def find_all_genius(self, title):

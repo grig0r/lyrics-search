@@ -26,6 +26,8 @@ class TekstowoSong(Song):
 
     def _fetch_lyrics(self):
         text_tag = self.soup.find('div', class_='song-text')
+        if not text_tag:
+            return None
         text = ' '.join(text_tag.find_all(text=True, recursive=False))
         text = re.sub(r'^\s*(.*?)\s*$', r'\1', text, flags=re.DOTALL)
         return text
