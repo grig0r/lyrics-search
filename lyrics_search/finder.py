@@ -2,11 +2,20 @@ import re
 from urllib.parse import urlsplit
 from concurrent.futures import ThreadPoolExecutor as Pool
 from collections import deque
+from functools import partial
+from itertools import chain, islice
 
-from . import tekstowo
-from . import genius
 from .string_utils import string_contained_percentage
 from .song_utils import create_song
+
+def uniq_attr(iterable, attr):
+    """return iterable without repeated element attributes"""
+    used_attrs = deque()
+    for i in iterable:
+        current_attr = getattr(i, attr)
+        if current_attr not in used_attrs:
+            yield i
+            used_attrs.append(current_attr)
 
 class Finder(object):
     """Class for finding song lyrics on the web."""
@@ -30,17 +39,6 @@ class Finder(object):
             import ddgclient
             self.backends.append(ddgclient)
 
-    def _filter_by_domain(self, results, domain):
-        return [r for r in results
-            if re.match(domain, urlsplit(r.url).netloc)]
-
-    def _filter_duplicates(self, results):
-        out = deque()
-        for result in results:
-            if result.url not in (r.url for r in out):
-                out.append(result)
-        return out
-
     def sort_by_fitting(self, songs, title):
         sorted_songs = sorted(
             songs,
@@ -49,66 +47,77 @@ class Finder(object):
             )
         return sorted_songs
 
-    def _find_all_results(self, title, website, domain, url_regex, engine):
-        search = engine.Search(title + ' ' + website)
-        results = self._filter_by_domain(search.results(self.max_results), domain)
-        results = [r for r in results
-            if re.search(url_regex, r.url)]
-        results = results[:self.max_songs]
+    def _is_website_result(self, result, domain, url_regex):
+        url = result.url
+        if not re.match(domain, urlsplit(url).netloc):
+            return False
+        elif not url_regex.search(url):
+            return False
+        else:
+            return True
+
+    def _find_all_engine_results(self, engine, title, website, filtering_func):
+        search = engine.Search('{} {}'.format(title, website))
+        results = filter(filtering_func, search.results(self.max_results))
+        return islice(results, self.max_songs)
+
+    def _find_all_website_results(self, title, website, filtering_func):
+        get_engine_results = partial(self._find_all_engine_results,
+            title=title, website=website, filtering_func=filtering_func)
+        with Pool() as pool:
+            results = uniq_attr(chain.from_iterable(pool.map(
+                get_engine_results,
+                self.backends
+                )), 'url')
         return results
 
-    def _find_all_results_futures(self, title, website, domain, url_regex):
-        futures = deque()
-        with Pool() as pool:
-            for engine in self.backends:
-                futures.append(pool.submit(
-                    self._find_all_results,
-                    title=title,
-                    website=website,
-                    domain=domain,
-                    url_regex=url_regex,
-                    engine=engine
-                    ))
-        return futures
+    def _is_genius_result(self, result):
+        return self._is_website_result(
+            result=result, domain='genius.com', url_regex=re.compile('-lyrics$')
+            )
 
-    def _find_all_genius_results_futures(self, title):
-        futures = self._find_all_results_futures(
+    def _find_all_genius_results(self, title):
+        return self._find_all_website_results(
             title=title,
             website='genius',
-            domain=r'genius.com',
-            url_regex=r'-lyrics$',
+            filtering_func=self._is_genius_result,
             )
-        return futures
 
-    def _find_all_tekstowo_results_futures(self, title):
-        futures = self._find_all_results_futures(
+    def _is_tekstowo_result(self, result):
+        return self._is_website_result(
+            result=result,
+            domain='www.tekstowo.pl',
+            url_regex=re.compile('tekstowo.pl/piosenka,'),
+            )
+
+    def _find_all_tekstowo_results(self, title):
+        return self._find_all_website_results(
             title=title,
             website='tekstowo',
-            domain=r'www.tekstowo.pl',
-            url_regex=r'tekstowo.pl/piosenka,',
+            filtering_func=self._is_tekstowo_result,
             )
-        return futures
 
     def _results_to_songs(self, results):
-        urls = (r.url for r in results)
+        urls = map(lambda r: r.url, results)
         with Pool() as pool:
-            songs = list(pool.map(create_song, urls))
+            songs = pool.map(create_song, urls)
         return songs
 
     def find_all(self, title, genius=True, tekstowo=True):
         """Find all songs found with given title. Returns list of *Song objects"""
-        results_futures = deque()
-        if genius:
-            results_futures.extend(self._find_all_genius_results_futures(title))
-        if tekstowo:
-            results_futures.extend(self._find_all_tekstowo_results_futures(title))
-        results = deque()
-        for future in results_futures:
-            results.extend(future.result())
-        results = self._filter_duplicates(results)
-        songs = self._results_to_songs(results)
-        songs = list(filter(lambda s: s.lyrics, songs))
-        return self.sort_by_fitting(songs, title)
+        result_funcs = \
+            ([self._find_all_genius_results] if genius else []) + \
+            ([self._find_all_tekstowo_results] if tekstowo else [])
+        with Pool() as pool:
+            results = chain.from_iterable(pool.map(
+                lambda func: func(title),
+                result_funcs
+                ))
+        songs = filter(
+            lambda s: s.lyrics is not None,
+            self._results_to_songs(results)
+            )
+        return list(songs)
 
     def find_all_genius(self, title):
         return self.find_all(title, genius=True, tekstowo=False)
