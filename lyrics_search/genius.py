@@ -12,10 +12,6 @@ class GeniusSong(Song):
         self.title = self._fetch_title()
         self.artist = self._fetch_artist()
 
-    @property
-    def name(self):
-        return '{} {}'.format(self.artist, self.title)
-
     def _get_soup(self):
         response = requests.get(self.url)
         soup = BeautifulSoup(response.content, 'html.parser')

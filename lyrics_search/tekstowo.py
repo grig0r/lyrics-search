@@ -12,13 +12,6 @@ class TekstowoSong(Song):
         self.lyrics = self._fetch_lyrics()
         self.artist, self.title = self._fetch_artist_title()
 
-    def __repr__(self):
-        return self.name
-
-    @property
-    def name(self):
-        return '{} {}'.format(self.artist, self.title)
-
     def _get_soup(self):
         response = requests.get(self.url)
         soup = BeautifulSoup(response.content, 'html.parser')
