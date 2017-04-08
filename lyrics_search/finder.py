@@ -5,6 +5,10 @@ from collections import deque
 from functools import partial
 from itertools import chain, islice
 
+from lyrics_search.loader import maybe_load, DummyModule
+ddgclient = maybe_load('ddgclient')
+gclient = maybe_load('gclient')
+
 from .string_utils import string_contained_percentage
 from .song_utils import create_song
 
@@ -33,11 +37,15 @@ class Finder(object):
         self.max_songs = max_songs
         self.backends = []
         if self.google:
-            import gclient
-            self.backends.append(gclient)
+            self._add_backend(gclient)
         if self.duckduckgo:
-            import ddgclient
-            self.backends.append(ddgclient)
+            self._add_backend(ddgclient)
+
+    def _add_backend(self, engine):
+        if isinstance(engine, DummyModule):
+            engine._raise()
+        else:
+            self.backends.append(engine)
 
     def sort_by_fitting(self, songs, title):
         sorted_songs = sorted(
